@@ -31,6 +31,8 @@ let configPath: String = {
     return exeDir + "/config.json"
 }()
 let dryRun = args.contains("--dry-run")
+let debug = args.contains("--debug")
+var lastDebug = Date.distantPast
 let appDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
 // One status file per config, so a test instance never overwrites the live one.
 let statusPath = (configPath as NSString).deletingPathExtension + ".status.json"
@@ -69,20 +71,22 @@ func localDisplays() -> [Disp] {
 func outerEdge(_ p: CGPoint, _ displays: [Disp]) -> (Disp, String)? {
     for d in displays {
         let inY = p.y >= d.b.minY && p.y < d.b.maxY, inX = p.x >= d.b.minX && p.x < d.b.maxX
-        if inY && abs(p.x - d.b.minX) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x - 3, y: p.y)) }) { return (d, "left") }
-        if inY && p.x >= d.b.maxX - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x + 3, y: p.y)) }) { return (d, "right") }
-        if inX && abs(p.y - d.b.minY) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y - 3)) }) { return (d, "top") }
-        if inX && p.y >= d.b.maxY - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y + 3)) }) { return (d, "bottom") }
+        guard inX && inY else { continue }                       // only the display the point is on
+        if abs(p.x - d.b.minX) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x - 3, y: p.y)) }) { return (d, "left") }
+        if p.x >= d.b.maxX - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x + 3, y: p.y)) }) { return (d, "right") }
+        if abs(p.y - d.b.minY) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y - 3)) }) { return (d, "top") }
+        if p.y >= d.b.maxY - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y + 3)) }) { return (d, "bottom") }
     }
     return nil
 }
+// Land well inside the display (8 px): an entry point within the edge tolerance would re-trigger the edge and bounce back.
 func entryPoint(_ d: Disp, side: String, frac: Double) -> CGPoint {
-    let f = min(max(frac, 0), 1)
+    let f = min(max(frac, 0), 1), m: CGFloat = 8
     switch side {
-    case "left":   return CGPoint(x: d.b.minX + 1, y: d.b.minY + f * (d.b.height - 1))
-    case "right":  return CGPoint(x: d.b.maxX - 2, y: d.b.minY + f * (d.b.height - 1))
-    case "top":    return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.minY + 1)
-    default:       return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.maxY - 2)
+    case "left":   return CGPoint(x: d.b.minX + m, y: d.b.minY + f * (d.b.height - 1))
+    case "right":  return CGPoint(x: d.b.maxX - 1 - m, y: d.b.minY + f * (d.b.height - 1))
+    case "top":    return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.minY + m)
+    default:       return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.maxY - 1 - m)
     }
 }
 func fracOnSide(_ p: CGPoint, _ d: Disp, _ side: String) -> Double {
@@ -149,9 +153,15 @@ func handleTap(_ type: CGEventType, _ event: CGEvent) -> Bool {   // returns tru
     if !onPeer {
         guard [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type) else { return false }
         let displays = localDisplays()
-        if let (d, side) = outerEdge(event.location, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
+        let hit = outerEdge(event.location, displays)
+        if debug, let (d, side) = hit, Date().timeIntervalSince(lastDebug) > 0.25 {
+            lastDebug = Date()
+            log("edge \(d.name) \(side) at \(Int(event.location.x)),\(Int(event.location.y)) link: \(edgeFrom(cfg.selfName, d.name, side).map { "\($0.to.machine)/\($0.to.display)" } ?? "none")")
+        }
+        if let (d, side) = hit, let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
            let t = displays.first(where: { $0.name == e.to.display }) {
             let p = entryPoint(t, side: opposite(side), frac: fracOnSide(event.location, d, side))
+            log("wrap \(d.name) \(side) -> \(t.name) at \(Int(p.x)),\(Int(p.y))")
             warp(p)
             return !dryRun            // the wrap replaces this move
         }
