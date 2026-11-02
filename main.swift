@@ -171,6 +171,10 @@ func handleMessage(_ m: [String: Any]) {
         guard expected.contains(t), (m["secret"] as? String) == secret else {
             log("rejected connection: bad hello"); connection?.cancel(); connection = nil; return
         }
+        if (m["machine"] as? String) == cfg.selfName {   // a copy of this Mac talking to itself
+            log("rejected connection: the other side is this same Mac (\(cfg.selfName)); run that config on the other computer")
+            connection?.cancel(); connection = nil; return
+        }
         authed = true
         peerMachine = m["machine"] as? String ?? "?"
         peerDisplays = m["displays"] as? [[String: Any]] ?? []
