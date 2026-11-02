@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>screenflow setup</title>
+<style>
+:root{--bg:#fff;--ink:#0f172a;--muted:#475569;--line:#cbd5e1;--ms:#dbeafe;--mb:#dcfce7;--blue:#2563eb;--green:#16a34a;--orange:#ea580c;--red:#dc2626}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px -apple-system,system-ui,sans-serif}
+header{display:flex;gap:14px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:17px;margin:0 8px 0 0}
+button{font:inherit;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:#f8fafc;cursor:pointer}
+button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+#status{font-size:13px;color:var(--muted)}
+#status b{color:var(--green)}
+main{padding:12px 20px}
+svg{width:100%;height:560px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;user-select:none;touch-action:none}
+.screen{cursor:grab}.screen.dragging{cursor:grabbing}
+.handle{fill:#fff;stroke:var(--blue);stroke-width:2;cursor:crosshair}
+.handle.armed{fill:var(--blue)}
+.link{fill:none;stroke-width:2.5;cursor:pointer}.link:hover{stroke-width:5}
+.hint{font-size:13px;color:var(--muted);margin:10px 0 0}
+table{border-collapse:collapse;margin-top:12px;font-size:14px}td,th{border:1px solid #e2e8f0;padding:5px 10px;text-align:left}
+td button{padding:2px 8px;font-size:12px}
+</style></head><body>
+<header>
+  <h1>screenflow setup</h1>
+  <button id="auto">Auto-link touching edges</button>
+  <button id="wrapH">Add left/right wrap</button>
+  <button id="wrapV">Add top/bottom wrap</button>
+  <button id="clear">Remove all links</button>
+  <button id="save" class="primary">Save &amp; apply</button>
+  <span id="status">loading…</span>
+</header>
+<main>
+  <svg id="c" viewBox="0 0 1000 560"></svg>
+  <p class="hint">Drag a screen to where it stands on your desk. To draw a mouse flow: click a small circle on a screen's edge (the edge the mouse leaves), then click the screen it should arrive on. Click an arrow to delete it. Blue = Mac Studio, green = MacBook Pro. Edges between two screens of the same Mac are handled by macOS unless you draw a flow for them.</p>
+  <table id="links"><tr><th>Mouse leaves</th><th>Edge</th><th>Arrives on</th><th></th></tr></table>
+</main>
+<script>
+const S = 0.14;                    // desk pixels -> page units
+let screens = [], links = [], layout = {}, pending = null, drag = null, status = {};
+const opp = {left:'right', right:'left', top:'bottom', bottom:'top'};
+const svg = document.getElementById('c');
+const id = (m, n) => m + '/' + n;
+
+async function load() {
+  const st = await (await fetch('/api/state')).json();
+  const cfg = st.config || {}; status = st.status || {};
+  layout = cfg.layout || {};
+  const me = cfg.self || 'mac-studio', peer = Object.keys(cfg.machines || {}).find(k => k !== me) || 'daniel';
+  const known = {};
+  (status.localDisplays || []).forEach(d => known[id(me, d.name)] = {machine: me, name: d.name, w: d.w, h: d.h, osx: d.x, osy: d.y});
+  (status.peerDisplays || []).forEach(d => known[id(peer, d.name)] = {machine: peer, name: d.name, w: d.w, h: d.h, osx: d.x, osy: d.y});
+  Object.entries(layout).forEach(([k, v]) => { if (!known[k]) known[k] = {machine: k.split('/')[0], name: k.split('/').slice(1).join('/'), w: v.w, h: v.h}; });
+  (cfg.edges || []).forEach(e => [e.from, e.to].forEach(r => { const k = id(r.machine, r.display); if (!known[k]) known[k] = {machine: r.machine, name: r.display, w: 1920, h: 1080}; }));
+  // positions: saved layout first, else OS positions (peer shifted to the right of the local group)
+  const localMaxX = Math.max(0, ...Object.values(known).filter(s => s.machine === me && s.osx != null).map(s => s.osx + s.w));
+  const minY = Math.min(0, ...Object.values(known).filter(s => s.osy != null).map(s => s.osy));
+  screens = Object.entries(known).map(([k, s]) => {
+    const L = layout[k];
+    const x = L ? L.x : (s.osx != null ? (s.machine === me ? s.osx : s.osx + localMaxX + 400) : 0) + 200;
+    const y = L ? L.y : (s.osy != null ? s.osy - minY : 0) + 200;
+    return {id: k, ...s, x, y};
+  });
+  links = (cfg.edges || []).map(e => ({from: id(e.from.machine, e.from.display), side: e.side, to: id(e.to.machine, e.to.display)}));
+  render();
+}
+
+function edgePt(s, side) {
+  const x = s.x * S, y = s.y * S, w = s.w * S, h = s.h * S;
+  return {left: [x, y + h / 2], right: [x + w, y + h / 2], top: [x + w / 2, y], bottom: [x + w / 2, y + h]}[side];
+}
+function render() {
+  const me = screens.find(s => s.machine === 'mac-studio') ? 'mac-studio' : (screens[0] || {}).machine;
+  let out = `<defs><marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>`;
+  links.forEach((l, i) => {
+    const a = screens.find(s => s.id === l.from), b = screens.find(s => s.id === l.to); if (!a || !b) return;
+    const p1 = edgePt(a, l.side), p2 = edgePt(b, opp[l.side]);
+    const cross = a.machine !== b.machine, vertical = l.side === 'top' || l.side === 'bottom';
+    const col = vertical ? 'var(--orange)' : cross ? 'var(--green)' : 'var(--blue)';
+    const far = (l.side === 'left' && p2[0] > p1[0]) || (l.side === 'right' && p2[0] < p1[0]) || (l.side === 'top' && p2[1] > p1[1]) || (l.side === 'bottom' && p2[1] < p1[1]);
+    let d;
+    if (far) {  // a wrap: loop around the outside
+      const off = 60 + 18 * i;
+      if (!vertical) { const yb = Math.max(p1[1], p2[1]) + 120 + off; const dx = l.side === 'left' ? -off : off;
+        d = `M${p1[0]},${p1[1]} C${p1[0] + dx},${p1[1]} ${p1[0] + dx},${yb} ${(p1[0] + p2[0]) / 2},${yb} S${p2[0] - dx},${p2[1]} ${p2[0]},${p2[1]}`; }
+      else { const xl = Math.min(p1[0], p2[0]) - 120 - off; const dy = l.side === 'top' ? -off : off;
+        d = `M${p1[0]},${p1[1]} C${p1[0]},${p1[1] + dy} ${xl},${p1[1] + dy} ${xl},${(p1[1] + p2[1]) / 2} S${p2[0]},${p2[1] - dy} ${p2[0]},${p2[1]}`; }
+    } else d = `M${p1[0]},${p1[1]} L${p2[0]},${p2[1]}`;
+    out += `<path class="link" data-i="${i}" d="${d}" stroke="${col}" marker-end="url(#m)"><title>${a.name} ${l.side} → ${b.name} (click to delete)</title></path>`;
+  });
+  screens.forEach(s => {
+    const x = s.x * S, y = s.y * S, w = s.w * S, h = s.h * S;
+    out += `<g class="screen" data-id="${s.id}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${s.machine === me ? 'var(--ms)' : 'var(--mb)'}" stroke="#1e3a8a" stroke-width="1.5"/>
+      <text x="${x + w / 2}" y="${y + h / 2}" text-anchor="middle" font-size="13" font-weight="600" pointer-events="none">${s.name}</text>
+      <text x="${x + w / 2}" y="${y + h / 2 + 17}" text-anchor="middle" font-size="11" fill="#475569" pointer-events="none">${s.machine}${s.osx == null ? ' (not reported yet)' : ''}</text>`;
+    ['left', 'right', 'top', 'bottom'].forEach(side => { const p = edgePt(s, side);
+      out += `<circle class="handle${pending && pending.from === s.id && pending.side === side ? ' armed' : ''}" data-id="${s.id}" data-side="${side}" cx="${p[0]}" cy="${p[1]}" r="6"><title>mouse leaves ${s.name} by the ${side} edge</title></circle>`; });
+    out += `</g>`;
+  });
+  if (status.cursor && !status.onPeer) { const loc = screens.filter(s => s.machine === me && s.osx != null);
+    const under = loc.find(s => status.cursor.x >= s.osx && status.cursor.x < s.osx + s.w && status.cursor.y >= s.osy && status.cursor.y < s.osy + s.h);
+    if (under) out += `<circle cx="${(under.x + status.cursor.x - under.osx) * S}" cy="${(under.y + status.cursor.y - under.osy) * S}" r="5" fill="var(--red)" stroke="#fff" stroke-width="2" pointer-events="none"/>`; }
+  svg.innerHTML = out;
+  document.getElementById('status').innerHTML = status.connected ? `<b>connected</b> to ${status.peer}, ${(status.peerDisplays || []).length} screens reported` : 'other Mac not connected (its screens are drawn from the last saved layout)';
+  const t = document.getElementById('links'); t.innerHTML = '<tr><th>Mouse leaves</th><th>Edge</th><th>Arrives on</th><th></th></tr>' +
+    links.map((l, i) => `<tr><td>${l.from}</td><td>${l.side}</td><td>${l.to}</td><td><button data-del="${i}">delete</button></td></tr>`).join('');
+}
+
+// interactions
+svg.addEventListener('pointerdown', ev => {
+  const h = ev.target.closest('.handle');
+  if (h) { pending = {from: h.dataset.id, side: h.dataset.side}; render(); return; }
+  const g = ev.target.closest('.screen');
+  if (!g) { pending = null; render(); return; }
+  if (pending) { if (pending.from !== g.dataset.id) { links.push({...pending, to: g.dataset.id}); } pending = null; render(); return; }
+  const s = screens.find(x => x.id === g.dataset.id); const pt = svgPt(ev);
+  drag = {s, dx: pt.x / S - s.x, dy: pt.y / S - s.y}; g.classList.add('dragging'); svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener('pointermove', ev => { if (!drag) return; const pt = svgPt(ev); drag.s.x = pt.x / S - drag.dx; drag.s.y = pt.y / S - drag.dy; render(); });
+svg.addEventListener('pointerup', () => { if (drag) { drag.s.x = Math.round(drag.s.x / 40) * 40; drag.s.y = Math.round(drag.s.y / 40) * 40; drag = null; render(); } });
+svg.addEventListener('click', ev => { const p = ev.target.closest('.link'); if (p) { links.splice(+p.dataset.i, 1); render(); } });
+document.getElementById('links').addEventListener('click', ev => { if (ev.target.dataset.del != null) { links.splice(+ev.target.dataset.del, 1); render(); } });
+function svgPt(ev) { const r = svg.getBoundingClientRect(); return {x: (ev.clientX - r.left) * 1000 / r.width, y: (ev.clientY - r.top) * 560 / r.height}; }
+function touching(a, b, side) {   // b continues past a's `side` edge, with overlap on the other axis
+  const gap = 60;
+  if (side === 'right')  return Math.abs(a.x + a.w - b.x) < gap && a.y < b.y + b.h && b.y < a.y + a.h;
+  if (side === 'left')   return Math.abs(b.x + b.w - a.x) < gap && a.y < b.y + b.h && b.y < a.y + a.h;
+  if (side === 'bottom') return Math.abs(a.y + a.h - b.y) < gap && a.x < b.x + b.w && b.x < a.x + a.w;
+  return Math.abs(b.y + b.h - a.y) < gap && a.x < b.x + b.w && b.x < a.x + a.w;
+}
+function addLink(from, side, to) { if (!links.some(l => l.from === from && l.side === side)) links.push({from, side, to}); }
+document.getElementById('auto').onclick = () => {   // flows between the two Macs wherever screens touch
+  screens.forEach(a => screens.forEach(b => { if (a.machine === b.machine) return;
+    ['left', 'right', 'top', 'bottom'].forEach(side => { if (touching(a, b, side)) addLink(a.id, side, b.id); }); })); render(); };
+document.getElementById('wrapH').onclick = () => {   // leftmost screens' left edge -> rightmost screen, and back
+  const minX = Math.min(...screens.map(s => s.x)), maxR = Math.max(...screens.map(s => s.x + s.w));
+  const rightmost = screens.filter(s => s.x + s.w === maxR)[0], leftmost = screens.filter(s => s.x === minX);
+  leftmost.forEach(s => addLink(s.id, 'left', rightmost.id)); addLink(rightmost.id, 'right', leftmost[0].id); render(); };
+document.getElementById('wrapV').onclick = () => {   // per column: bottom screen's bottom -> top screen, and back
+  const cols = {}; screens.forEach(s => (cols[Math.round(s.x / 200)] = cols[Math.round(s.x / 200)] || []).push(s));
+  Object.values(cols).forEach(c => { if (c.length < 2) return; c.sort((a, b) => a.y - b.y);
+    addLink(c[c.length - 1].id, 'bottom', c[0].id); addLink(c[0].id, 'top', c[c.length - 1].id); }); render(); };
+document.getElementById('clear').onclick = () => { links = []; render(); };
+document.getElementById('save').onclick = async () => {
+  const edges = links.map(l => ({from: {machine: l.from.split('/')[0], display: l.from.split('/').slice(1).join('/')}, side: l.side,
+                                 to: {machine: l.to.split('/')[0], display: l.to.split('/').slice(1).join('/')}}));
+  const lay = {}; screens.forEach(s => lay[s.id] = {x: Math.round(s.x), y: Math.round(s.y), w: s.w, h: s.h});
+  const r = await (await fetch('/api/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({edges, layout: lay})})).json();
+  document.getElementById('status').textContent = r.ok ? `saved ${r.links} flows, app restarted` : 'save failed: ' + r.error;
+};
+load(); setInterval(async () => { if (drag || pending) return; const st = await (await fetch('/api/state')).json(); status = st.status || {}; render(); }, 1500);
+</script>
+</body></html>
