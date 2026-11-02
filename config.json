@@ -1,0 +1,78 @@
+{
+  "secret": "FILE:secret.txt",
+  "port": 24801,
+  "self": "mac-studio",
+  "physical": "mac-studio",
+  "machines": {
+    "mac-studio": "Danimasters-Mac-Studio.local",
+    "daniel": "daniels-macbook-pro.local"
+  },
+  "edges": [
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      },
+      "side": "right",
+      "to": {
+        "machine": "daniel",
+        "display": "Built-in Retina Display"
+      }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "LG FULL HD"
+      },
+      "side": "right",
+      "to": {
+        "machine": "daniel",
+        "display": "Built-in Retina Display"
+      }
+    },
+    {
+      "from": {
+        "machine": "daniel",
+        "display": "Built-in Retina Display"
+      },
+      "side": "left",
+      "to": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      },
+      "side": "left",
+      "to": {
+        "machine": "daniel",
+        "display": "DELL P2725H"
+      }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "LG FULL HD"
+      },
+      "side": "left",
+      "to": {
+        "machine": "daniel",
+        "display": "DELL P2725H"
+      }
+    },
+    {
+      "from": {
+        "machine": "daniel",
+        "display": "DELL P2725H"
+      },
+      "side": "right",
+      "to": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      }
+    }
+  ]
+}

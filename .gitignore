@@ -1,0 +1,8 @@
+secret.txt
+*.status.json
+*.log
+layout.html
+tools/permcheck
+tools/postmove
+tools/cursorpos
+*.v1
