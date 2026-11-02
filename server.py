@@ -41,6 +41,8 @@ class H(BaseHTTPRequestHandler):
         for e in edges:
             if e.get("side") not in ("left", "right", "top", "bottom") or not e.get("from") or not e.get("to"):
                 return self.send(400, {"error": f"bad link: {e}"})
+            if e.get("enter") not in (None, "left", "right", "top", "bottom"):
+                return self.send(400, {"error": f"bad arrival edge: {e}"})
         for p in (CFG, CFG_PEER):
             c = load(p, {}); c["edges"] = edges; c["layout"] = layout
             json.dump(c, open(p, "w", encoding="utf8"), indent=2, ensure_ascii=False)

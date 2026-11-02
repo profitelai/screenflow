@@ -11,7 +11,8 @@ import CoreGraphics
 import Network
 
 struct Ref: Codable { let machine: String; let display: String }
-struct Edge: Codable { let from: Ref; let side: String; let to: Ref }
+struct Edge: Codable { let from: Ref; let side: String; let to: Ref; let enter: String? }   // enter: arrival edge, default opposite(side)
+func arrival(_ e: Edge) -> String { e.enter ?? opposite(e.side) }
 struct Config: Codable {
     let secret: String
     let port: UInt16
@@ -33,6 +34,9 @@ let configPath: String = {
 let dryRun = args.contains("--dry-run")
 let debug = args.contains("--debug")
 var lastDebug = Date.distantPast
+var lastHop = Date.distantPast          // no second hop within 250 ms: the event right after a warp can still carry the old edge position
+func hopAllowed() -> Bool { Date().timeIntervalSince(lastHop) > 0.25 }
+func hopped() { lastHop = Date() }
 let appDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
 // One status file per config, so a test instance never overwrites the live one.
 let statusPath = (configPath as NSString).deletingPathExtension + ".status.json"
@@ -158,20 +162,21 @@ func handleTap(_ type: CGEventType, _ event: CGEvent) -> Bool {   // returns tru
             lastDebug = Date()
             log("edge \(d.name) \(side) at \(Int(event.location.x)),\(Int(event.location.y)) link: \(edgeFrom(cfg.selfName, d.name, side).map { "\($0.to.machine)/\($0.to.display)" } ?? "none")")
         }
-        if let (d, side) = hit, let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
+        if hopAllowed(), let (d, side) = hit, let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
            let t = displays.first(where: { $0.name == e.to.display }) {
-            let p = entryPoint(t, side: opposite(side), frac: fracOnSide(event.location, d, side))
+            let p = entryPoint(t, side: arrival(e), frac: fracOnSide(event.location, d, side))
             log("wrap \(d.name) \(side) -> \(t.name) at \(Int(p.x)),\(Int(p.y))")
-            warp(p)
+            hopped(); warp(p)
+            if !dryRun { CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap) }
             return !dryRun            // the wrap replaces this move
         }
-        if connection != nil && authed,
+        if hopAllowed(), connection != nil && authed,
            let (d, side) = outerEdge(event.location, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine != cfg.selfName,
            peerDisplays.contains(where: { ($0["name"] as? String) == e.to.display }) {   // target must exist on the peer
-            onPeer = true
+            onPeer = true; hopped()
             setAssociate(false)
-            log("cursor -> \(e.to.machine) \(e.to.display) (\(opposite(side)) edge)")
-            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(event.location, d, side)])
+            log("cursor -> \(e.to.machine) \(e.to.display) (\(arrival(e)) edge)")
+            send(["t": "enter", "display": e.to.display, "side": arrival(e), "frac": fracOnSide(event.location, d, side)])
         }
         return false
     }
@@ -208,7 +213,7 @@ func handleMessage(_ m: [String: Any]) {
         peerDisplays = m["displays"] as? [[String: Any]] ?? []
         log("connected to \(peerMachine), displays: \(peerDisplays.compactMap { $0["name"] as? String })")
         if isPhysical {
-            let edgeList = edges.map { ["from": ["machine": $0.from.machine, "display": $0.from.display], "side": $0.side, "to": ["machine": $0.to.machine, "display": $0.to.display]] }
+            let edgeList = edges.map { ["from": ["machine": $0.from.machine, "display": $0.from.display], "side": $0.side, "to": ["machine": $0.to.machine, "display": $0.to.display], "enter": arrival($0)] }
             send(["t": "hello", "secret": secret, "machine": cfg.selfName, "host": hostName, "displays": displayDicts(), "edges": edgeList])
         } else if let list = m["edges"] as? [[String: Any]],
                   let data = try? JSONSerialization.data(withJSONObject: list),
@@ -227,6 +232,7 @@ func handleMessage(_ m: [String: Any]) {
         guard let d = localDisplays().first(where: { $0.name == (m["display"] as? String ?? "") }) else { return }
         let p = entryPoint(d, side: m["side"] as? String ?? "left", frac: m["frac"] as? Double ?? 0.5)
         if isPhysical { onPeer = false; setAssociate(true) } else { simulating = true }
+        hopped()
         log("cursor on this Mac at \(d.name)")
         warp(p)
     case "move":
@@ -235,14 +241,14 @@ func handleMessage(_ m: [String: Any]) {
         let cur = cursor()
         let next = CGPoint(x: cur.x + dx, y: cur.y + dy)
         let displays = localDisplays()
-        if let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
+        if hopAllowed(), let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
            let t = displays.first(where: { $0.name == e.to.display }) {
-            warp(entryPoint(t, side: opposite(side), frac: fracOnSide(next, d, side))); return
+            hopped(); warp(entryPoint(t, side: arrival(e), frac: fracOnSide(next, d, side))); return
         }
-        if let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side) {
-            simulating = false
-            log("cursor back to \(e.to.machine) (\(opposite(side)) edge)")
-            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(next, d, side)])
+        if hopAllowed(), let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side) {
+            simulating = false; hopped()
+            log("cursor back to \(e.to.machine) (\(arrival(e)) edge)")
+            send(["t": "enter", "display": e.to.display, "side": arrival(e), "frac": fracOnSide(next, d, side)])
             return
         }
         var target = next
