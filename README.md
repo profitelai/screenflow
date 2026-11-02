@@ -19,7 +19,7 @@ talking over your own network, and a local web page to draw the flows.
 
 ![How the mouse moves, generated from the saved flows](docs/flow.png)
 
-## Install (both Macs, about five minutes)
+## Install (both Macs, once)
 On each Mac, in Terminal:
 ```
 cd ~ && curl -L https://github.com/profitelai/screenflow/archive/refs/heads/main.zip -o screenflow.zip \
@@ -27,24 +27,44 @@ cd ~ && curl -L https://github.com/profitelai/screenflow/archive/refs/heads/main
 ```
 `install.sh` builds from source when the Swift compiler is present, otherwise uses the committed binary; it asks once for the
 shared secret (the same string on both Macs, kept in `secret.txt`, never in git) and prints the displays it sees.
+To update later, run the same command again (it replaces the folder; you will be asked for the secret again).
 
-Then grant the permission macOS requires:
-- **Both Macs:** System Settings > Privacy & Security > *Accessibility*: add Terminal (or whatever launches the app), switch it on,
-  quit and reopen Terminal.
+Then grant the permission macOS requires, once:
+- **Both Macs:** System Settings > Privacy & Security > *Accessibility*: add Terminal, switch it on, then quit and reopen Terminal.
 - **The Mac with the mouse only:** also *Input Monitoring*.
 
-Start the follower first, then the mouse owner:
+## Launch (every time)
+Same command on both Macs; the script knows which role each computer has.
+
+**1. The follower first** (the Mac without the mouse, here the MacBook Pro). In its Terminal:
 ```
-./screenflow config-daniel.json     # the Mac that follows (MacBook Pro)
-./screenflow config.json            # the Mac that owns the mouse (Mac Studio)
+cd ~/screenflow-main && ./start.sh
 ```
-Both print `connected to <other machine>, displays: [...]`.
+It prints `link up to mac-studio` and keeps retrying every 3 seconds until the mouse owner is up. Leave the window open.
+
+**2. Then the mouse owner** (here the Mac Studio). In its Terminal:
+```
+cd ~/screenflow-main && ./start.sh
+```
+Within a few seconds **both** windows print `connected to <other machine>, displays: [...]`. From then on the mouse crosses
+between the screens along the saved flows. `Ctrl+C` in a window stops that side; the other side keeps waiting.
+
+To also open the setup page on the mouse owner: `./start.sh --setup` (it starts the page at http://127.0.0.1:8777/ and opens it).
+
+### If it does not connect
+| What you see | Cause | Fix |
+|---|---|---|
+| follower: `link to the other Mac closed` every 3 s; owner: `rejected connection: bad hello` | the two `secret.txt` files differ | on the owner: `cat secret.txt`; on the follower: `./install.sh` again and type that value |
+| `connected to ...` shows **your own** displays | you started the follower config on the owner Mac (or the reverse) | use `./start.sh`, which picks the role from the computer name |
+| `cannot create event tap` | Accessibility / Input Monitoring not granted to Terminal | grant it, quit and reopen Terminal, start again |
+| follower: `cannot reach mac-studio` | name not resolving | in `config-daniel.json` replace `Danimasters-Mac-Studio.local` with the owner's IP (e.g. `192.168.0.164`) |
+| mouse crosses but cannot come back | follower runs an old build | update the follower (install command above) |
+| cursor fights or jumps | macOS Universal Control is on | turn it off in Displays > Advanced on either Mac |
+`Escape` three times quickly on the owner's keyboard always brings the mouse back.
 
 ## Set up the flows
-On the Mac that owns the mouse:
-```
-python3 server.py          # then open http://127.0.0.1:8777/
-```
+On the Mac that owns the mouse: `./start.sh --setup`, or just `python3 server.py` and open http://127.0.0.1:8777/.
+
 - Drag each screen to where it stands on the desk.
 - Click the small circle on the edge the mouse **leaves**, then click the screen it should **arrive on**
   (it enters on the opposite edge), or click that screen's edge circle to choose the exact arrival edge.
@@ -62,5 +82,5 @@ Only `config.json` on the mouse-owner Mac matters; the follower gets its links o
 - `./screenflow <config> --check` prints the displays and links; `--dry-run` logs instead of moving anything.
 
 ## Files
-`main.swift` (the app, one file) · `screenflow` (prebuilt) · `config.json` / `config-daniel.json` · `install.sh` ·
+`main.swift` (the app, one file) · `screenflow` (prebuilt) · `config.json` / `config-daniel.json` · `install.sh` · `start.sh` ·
 `server.py` + `setup.html` (the setup page) · `make_flow.py` (flow picture) · `make_layout.py --watch` (live layout page).
