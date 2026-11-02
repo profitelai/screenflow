@@ -39,6 +39,7 @@ let cfg: Config = {
     catch { fputs("cannot read \(configPath): \(error)\n", stderr); exit(1) }
 }()
 let isPhysical = cfg.selfName == cfg.physical
+let hostName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 let secret: String = {
     if cfg.secret.hasPrefix("FILE:") {
         let p = appDir + "/" + String(cfg.secret.dropFirst(5))
@@ -188,8 +189,8 @@ func handleMessage(_ m: [String: Any]) {
         guard expected.contains(t), (m["secret"] as? String) == secret else {
             log("rejected connection: bad hello"); connection?.cancel(); connection = nil; return
         }
-        if (m["machine"] as? String) == cfg.selfName {   // a copy of this Mac talking to itself
-            log("rejected connection: the other side is this same Mac (\(cfg.selfName)); run that config on the other computer")
+        if (m["host"] as? String) == hostName || (m["machine"] as? String) == cfg.selfName {   // same computer talking to itself
+            log("rejected connection: the other side is this same computer (\(hostName)); run that config on the other Mac")
             connection?.cancel(); connection = nil; return
         }
         authed = true
@@ -198,7 +199,7 @@ func handleMessage(_ m: [String: Any]) {
         log("connected to \(peerMachine), displays: \(peerDisplays.compactMap { $0["name"] as? String })")
         if isPhysical {
             let edgeList = edges.map { ["from": ["machine": $0.from.machine, "display": $0.from.display], "side": $0.side, "to": ["machine": $0.to.machine, "display": $0.to.display]] }
-            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "displays": displayDicts(), "edges": edgeList])
+            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "host": hostName, "displays": displayDicts(), "edges": edgeList])
         } else if let list = m["edges"] as? [[String: Any]],
                   let data = try? JSONSerialization.data(withJSONObject: list),
                   let got = try? JSONDecoder().decode([Edge].self, from: data), !got.isEmpty {
@@ -302,7 +303,7 @@ func connectToPhysical() {
         case .ready:
             log("link up to \(cfg.physical), checking the shared secret")
             attach(c)
-            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "displays": displayDicts()])
+            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "host": hostName, "displays": displayDicts()])
         case .failed(let err):
             log("cannot reach \(cfg.physical): \(err)")
             fallthrough
