@@ -6,3 +6,4 @@ tools/permcheck
 tools/postmove
 tools/cursorpos
 *.v1
+flow.html
