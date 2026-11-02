@@ -84,41 +84,30 @@
         "machine": "mac-studio",
         "display": "VG248"
       }
-    },
-    {
-      "from": {
-        "machine": "mac-studio",
-        "display": "LG FULL HD"
-      },
-      "side": "right",
-      "to": {
-        "machine": "daniel",
-        "display": "Built-in Retina Display"
-      }
     }
   ],
   "layout": {
     "mac-studio/VG248": {
-      "x": -1240,
-      "y": 2160,
+      "x": -40,
+      "y": 2200,
       "w": 1920,
       "h": 1080
     },
     "mac-studio/LG FULL HD": {
-      "x": 200,
-      "y": 200,
+      "x": 640,
+      "y": 80,
       "w": 1920,
       "h": 1080
     },
     "daniel/DELL P2725H": {
-      "x": 5320,
-      "y": 1040,
+      "x": 4200,
+      "y": 160,
       "w": 1920,
       "h": 1080
     },
     "daniel/Built-in Retina Display": {
-      "x": 3280,
-      "y": 840,
+      "x": 3080,
+      "y": 2600,
       "w": 1728,
       "h": 1117
     }
