@@ -9,6 +9,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 import Network
+import CryptoKit
 
 struct Ref: Codable { let machine: String; let display: String }
 struct Edge: Codable { let from: Ref; let side: String; let to: Ref; let enter: String? }   // enter: arrival edge, default opposite(side)
@@ -111,12 +112,32 @@ var simulating = false             // peer: the other Mac's mouse moves my curso
 var escapeTimes: [Date] = []
 var pendingBuffer = Data()
 
+// ---- transport security: nonce exchange, per-session key from the shared secret (HKDF-SHA256),
+// every message sealed with ChaCha20-Poly1305. The secret itself never goes on the wire; a wrong
+// secret fails to decrypt. A per-message counter rejects replayed lines.
+var sessionKey: SymmetricKey?
+var myNonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+var sendCounter: UInt64 = 0, recvCounter: UInt64 = 0
+
+func deriveKey(clientNonce: Data, serverNonce: Data) -> SymmetricKey {
+    HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(secret.utf8)),
+                           salt: clientNonce + serverNonce, info: Data("screenflow-v2".utf8), outputByteCount: 32)
+}
+func resetSession() { sessionKey = nil; sendCounter = 0; recvCounter = 0; myNonce = Data((0..<16).map { _ in UInt8.random(in: 0...255) }) }
+func sendPlain(_ dict: [String: Any]) {
+    guard let c = connection, var d = try? JSONSerialization.data(withJSONObject: dict) else { return }
+    d.append(0x0A); c.send(content: d, completion: .contentProcessed { _ in })
+}
+
 func displayDicts() -> [[String: Any]] {
     localDisplays().map { ["name": $0.name, "x": Int($0.b.minX), "y": Int($0.b.minY), "w": Int($0.b.width), "h": Int($0.b.height)] }
 }
 func send(_ dict: [String: Any]) {
-    guard let c = connection else { return }
-    var d = (try? JSONSerialization.data(withJSONObject: dict)) ?? Data(); d.append(0x0A)
+    guard let c = connection, let key = sessionKey else { return }        // nothing leaves in clear
+    var m = dict; sendCounter += 1; m["n"] = sendCounter
+    guard let plain = try? JSONSerialization.data(withJSONObject: m),
+          let box = try? ChaChaPoly.seal(plain, using: key) else { return }
+    var d = Data(box.combined.base64EncodedString().utf8); d.append(0x0A)
     c.send(content: d, completion: .contentProcessed { _ in })
 }
 func setAssociate(_ on: Bool) { if !dryRun { CGAssociateMouseAndMouseCursorPosition(on ? 1 : 0) } }
@@ -198,12 +219,8 @@ func handleTap(_ type: CGEventType, _ event: CGEvent) -> Bool {   // returns tru
 func handleMessage(_ m: [String: Any]) {
     guard let t = m["t"] as? String else { return }
     if !authed {
-        // Mutual check: both sides must present the shared secret before anything else.
-        // The physical side answers with "hello" (not "hello_ok") so older peer builds accept it too.
-        let expected = isPhysical ? ["hello"] : ["hello", "hello_ok"]
-        guard expected.contains(t), (m["secret"] as? String) == secret else {
-            log("rejected connection: bad hello"); connection?.cancel(); connection = nil; return
-        }
+        // The line was sealed with the session key, so the other side knows the shared secret.
+        guard t == "hello" else { log("rejected connection: bad hello"); connection?.cancel(); connection = nil; return }
         if (m["host"] as? String) == hostName || (m["machine"] as? String) == cfg.selfName {   // same computer talking to itself
             log("rejected connection: the other side is this same computer (\(hostName)); run that config on the other Mac")
             connection?.cancel(); connection = nil; return
@@ -214,7 +231,7 @@ func handleMessage(_ m: [String: Any]) {
         log("connected to \(peerMachine), displays: \(peerDisplays.compactMap { $0["name"] as? String })")
         if isPhysical {
             let edgeList = edges.map { ["from": ["machine": $0.from.machine, "display": $0.from.display], "side": $0.side, "to": ["machine": $0.to.machine, "display": $0.to.display], "enter": arrival($0)] }
-            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "host": hostName, "displays": displayDicts(), "edges": edgeList])
+            send(["t": "hello", "machine": cfg.selfName, "host": hostName, "displays": displayDicts(), "edges": edgeList])
         } else if let list = m["edges"] as? [[String: Any]],
                   let data = try? JSONSerialization.data(withJSONObject: list),
                   let got = try? JSONDecoder().decode([Edge].self, from: data), !got.isEmpty {
@@ -281,14 +298,36 @@ func receiveLoop(_ c: NWConnection) {
             while let nl = pendingBuffer.firstIndex(of: 0x0A) {
                 let line = pendingBuffer.subdata(in: pendingBuffer.startIndex..<nl)
                 pendingBuffer.removeSubrange(pendingBuffer.startIndex...nl)
-                if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] { handleMessage(obj) }
+                if let key = sessionKey {
+                    guard let raw = Data(base64Encoded: line), let box = try? ChaChaPoly.SealedBox(combined: raw),
+                          let plain = try? ChaChaPoly.open(box, using: key),
+                          let obj = try? JSONSerialization.jsonObject(with: plain) as? [String: Any],
+                          let n = (obj["n"] as? NSNumber)?.uint64Value, n > recvCounter else {
+                        drop(c, authed ? "dropped a message that failed authentication; closing the link" : "rejected connection: bad hello"); return
+                    }
+                    recvCounter = n
+                    handleMessage(obj)
+                } else {
+                    // handshake: a plaintext "hi" carrying a 16-byte nonce, then the sealed "hello"
+                    guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any], obj["t"] as? String == "hi",
+                          let nonce = Data(base64Encoded: obj["nonce"] as? String ?? ""), nonce.count == 16 else {
+                        drop(c, "rejected connection: bad hello"); return
+                    }
+                    if isPhysical {
+                        sendPlain(["t": "hi", "nonce": myNonce.base64EncodedString()])
+                        sessionKey = deriveKey(clientNonce: nonce, serverNonce: myNonce)
+                    } else {
+                        sessionKey = deriveKey(clientNonce: myNonce, serverNonce: nonce)
+                        send(["t": "hello", "machine": cfg.selfName, "host": hostName, "displays": displayDicts()])
+                    }
+                }
             }
         }
         if isComplete || error != nil {
             c.cancel()
             if connection === c {
                 log("link to \(peerMachine.isEmpty ? "the other Mac" : peerMachine) closed")
-                connection = nil; authed = false; peerMachine = ""; peerDisplays = []
+                connection = nil; authed = false; peerMachine = ""; peerDisplays = []; resetSession()
                 takeBack("link closed")
                 simulating = false
             }
@@ -297,7 +336,12 @@ func receiveLoop(_ c: NWConnection) {
         receiveLoop(c)
     }
 }
-func attach(_ c: NWConnection) { connection = c; pendingBuffer = Data(); receiveLoop(c) }
+// Close a link and free the peer slot so the next connection attempt is accepted.
+func drop(_ c: NWConnection, _ reason: String) {
+    log(reason); c.cancel()
+    if connection === c { connection = nil; authed = false; peerMachine = ""; peerDisplays = []; resetSession(); takeBack("link dropped"); simulating = false }
+}
+func attach(_ c: NWConnection) { connection = c; pendingBuffer = Data(); resetSession(); receiveLoop(c) }
 
 func startPhysicalSide() {
     guard let listener = try? NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: cfg.port)!) else {
@@ -319,7 +363,7 @@ func connectToPhysical() {
         case .ready:
             log("link up to \(cfg.physical), checking the shared secret")
             attach(c)
-            send(["t": "hello", "secret": secret, "machine": cfg.selfName, "host": hostName, "displays": displayDicts()])
+            sendPlain(["t": "hi", "nonce": myNonce.base64EncodedString()])
         case .failed(let err):
             log("cannot reach \(cfg.physical): \(err)")
             fallthrough

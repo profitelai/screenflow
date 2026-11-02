@@ -58,7 +58,7 @@ To also open the setup page on the mouse owner: `./start.sh --setup` (it starts 
 | `connected to ...` shows **your own** displays | you started the follower config on the owner Mac (or the reverse) | use `./start.sh`, which picks the role from the computer name |
 | `cannot create event tap` | Accessibility / Input Monitoring not granted to Terminal | grant it, quit and reopen Terminal, start again |
 | follower: `cannot reach mac-studio` | name not resolving | in `config-daniel.json` replace `Danimasters-Mac-Studio.local` with the owner's IP (e.g. `192.168.0.164`) |
-| mouse crosses but cannot come back | follower runs an old build | update the follower (install command above) |
+| mouse crosses but cannot come back, or `rejected connection: bad hello` right after an update | the two Macs run different builds (the sealed transport needs both updated) | update the other Mac with the install command above |
 | cursor fights or jumps | macOS Universal Control is on | turn it off in Displays > Advanced on either Mac |
 `Escape` three times quickly on the owner's keyboard always brings the mouse back.
 
@@ -76,7 +76,12 @@ Only `config.json` on the mouse-owner Mac matters; the follower gets its links o
 ## Safety and limits
 - **Escape pressed three times** within 1.5 s on the mouse owner's keyboard always brings the mouse back.
 - The mouse is only handed over when the other Mac is connected, authenticated with the shared secret, and has reported the target display.
-- Keyboard input is never forwarded. Transport is plain TCP on the local network with a shared secret: home or office LAN only.
+- Keyboard input is never forwarded.
+- **Encryption.** Each connection starts with a nonce exchange; both sides derive a one-time session key from the shared secret
+  (HKDF-SHA256), and every message after that is sealed with ChaCha20-Poly1305 (CryptoKit). The secret itself is never sent,
+  a wrong secret simply fails to decrypt, a per-message counter rejects replays, and anything unencrypted after the handshake
+  closes the link. `tools/crypto_test.py` exercises all of this against a dry-run owner. Still meant for your own LAN: there is
+  no certificate pinning, so use a long secret.
 - Each app refuses to connect to a copy of itself on the same computer.
 - Turn off macOS **Universal Control** between the two Macs (Displays > Advanced), or both will try to move the cursor.
 - `./screenflow <config> --check` prints the displays and links; `--dry-run` logs instead of moving anything.
