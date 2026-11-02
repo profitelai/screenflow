@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """screenflow setup app: http://127.0.0.1:8777  (localhost only).
 Arrange the screens as they stand on the desk, draw mouse flows, save: config.json is written and the app restarted."""
-import json, os, subprocess, signal, sys
+import json, os, subprocess, signal, sys, secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CFG = os.path.join(HERE, "config.json"); CFG_PEER = os.path.join(HERE, "config-daniel.json")
 STATUS = os.path.join(HERE, "config.status.json"); PORT = 8777
+TOKEN = secrets.token_urlsafe(24)   # new on every start; only pages opened with it may read or change anything
+TOKEN_FILE = os.path.join(HERE, ".setup-token")
 
 def load(p, default=None):
     try: return json.load(open(p, encoding="utf8"))
@@ -28,14 +30,19 @@ class H(BaseHTTPRequestHandler):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data)
+    def token_ok(self):
+        q = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return ("token=" + TOKEN) in q.split("&") or self.headers.get("X-Setup-Token") == TOKEN
     def do_GET(self):
-        if self.path.startswith("/api/state"): return self.send(200, state())
+        if self.path.startswith("/api/state"):
+            return self.send(200, state()) if self.token_ok() else self.send(403, {"error": "missing or wrong setup token: open the page from the URL that server.py printed"})
         page = {"/": "setup.html", "/setup.html": "setup.html", "/flow.html": "flow.html", "/layout.html": "layout.html"}.get(self.path.split("?")[0])
         if not page: return self.send(404, {"error": "not found"})
         try: return self.send(200, open(os.path.join(HERE, page), "rb").read(), "text/html; charset=utf-8")
         except FileNotFoundError: return self.send(404, {"error": f"{page} missing (run make_flow.py / make_layout.py)"})
     def do_POST(self):
         if self.path != "/api/save": return self.send(404, {"error": "not found"})
+        if not self.token_ok(): return self.send(403, {"error": "missing or wrong setup token"})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or b"{}"))
         edges, layout = body.get("edges", []), body.get("layout", {})
         for e in edges:
@@ -51,6 +58,8 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-    print(f"screenflow setup: http://127.0.0.1:{PORT}  (Ctrl+C to stop)"); sys.stdout.flush()
+    with open(TOKEN_FILE, "w") as f: f.write(TOKEN + "\n")
+    os.chmod(TOKEN_FILE, 0o600)
+    print(f"screenflow setup: http://127.0.0.1:{PORT}/?token={TOKEN}  (Ctrl+C to stop)"); sys.stdout.flush()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass

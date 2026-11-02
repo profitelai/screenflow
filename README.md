@@ -83,6 +83,11 @@ Only `config.json` on the mouse-owner Mac matters; the follower gets its links o
   closes the link. `tools/crypto_test.py` exercises all of this against a dry-run owner. Still meant for your own LAN: there is
   no certificate pinning, so use a long secret.
 - Each app refuses to connect to a copy of itself on the same computer.
+- **Follower pinning.** The first computer that connects with the right secret is remembered (`peer_host` in `config.json`);
+  any other computer is refused even with the secret. To switch laptops, delete that line and restart.
+- **Setup page token.** `server.py` prints a one-time URL with `?token=...`; only pages opened from it can read or change
+  the flows, so another program on the same Mac cannot rewrite them. `./start.sh --setup` opens the right URL for you.
+- The installer makes a 32-character secret; when you rotate it, both Macs must get the new one.
 - Turn off macOS **Universal Control** between the two Macs (Displays > Advanced), or both will try to move the cursor.
 - `./screenflow <config> --check` prints the displays and links; `--dry-run` logs instead of moving anything.
 

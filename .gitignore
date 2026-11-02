@@ -7,3 +7,4 @@ tools/postmove
 tools/cursorpos
 *.v1
 flow.html
+.setup-token

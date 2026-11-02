@@ -21,7 +21,8 @@ struct Config: Codable {
     let physical: String
     let machines: [String: String]
     let edges: [Edge]
-    enum CodingKeys: String, CodingKey { case secret, port, physical, machines, edges; case selfName = "self" }
+    let peerHost: String?          // the follower's computer name, pinned after the first connection
+    enum CodingKeys: String, CodingKey { case secret, port, physical, machines, edges; case selfName = "self"; case peerHost = "peer_host" }
 }
 struct Disp { let name: String; let id: CGDirectDisplayID; let b: CGRect }
 
@@ -58,6 +59,7 @@ let secret: String = {
     return cfg.secret
 }()
 var edges: [Edge] = cfg.edges   // the physical Mac's config is the single source of truth; peers receive it
+var pinnedPeer: String? = cfg.peerHost   // kept in memory as well as in config.json
 
 func opposite(_ s: String) -> String {
     switch s { case "left": return "right"; case "right": return "left"; case "top": return "bottom"; default: return "top" }
@@ -99,6 +101,13 @@ func fracOnSide(_ p: CGPoint, _ d: Disp, _ side: String) -> Double {
 }
 func edgeFrom(_ machine: String, _ display: String, _ side: String) -> Edge? {
     edges.first { $0.from.machine == machine && $0.from.display == display && $0.side == side }
+}
+// First follower wins: remember its computer name in config.json so another machine with the secret is still refused.
+func pinPeer(_ host: String) {
+    guard var obj = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: configPath)))) as? [String: Any] else { return }
+    obj["peer_host"] = host; pinnedPeer = host
+    if let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) { try? d.write(to: URL(fileURLWithPath: configPath), options: .atomic) }
+    log("pinned follower computer: \(host)")
 }
 func log(_ s: String) { print("\(Date()) \(s)"); fflush(stdout) }
 
@@ -221,6 +230,13 @@ func handleMessage(_ m: [String: Any]) {
     if !authed {
         // The line was sealed with the session key, so the other side knows the shared secret.
         guard t == "hello" else { log("rejected connection: bad hello"); connection?.cancel(); connection = nil; return }
+        if isPhysical, let host = m["host"] as? String, !host.isEmpty {
+            if let pinned = pinnedPeer, !pinned.isEmpty, pinned != host {
+                log("rejected connection: computer '\(host)' is not the pinned follower '\(pinned)' (edit peer_host in config.json to change)")
+                connection?.cancel(); connection = nil; return
+            }
+            if (pinnedPeer ?? "").isEmpty { pinPeer(host) }
+        }
         if (m["host"] as? String) == hostName || (m["machine"] as? String) == cfg.selfName {   // same computer talking to itself
             log("rejected connection: the other side is this same computer (\(hostName)); run that config on the other Mac")
             connection?.cancel(); connection = nil; return

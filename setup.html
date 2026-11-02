@@ -45,10 +45,13 @@ const S = 0.14;                    // desk pixels -> page units
 let screens = [], links = [], layout = {}, pending = null, drag = null, status = {}, selected = null, linkDrag = null;
 const opp = {left:'right', right:'left', top:'bottom', bottom:'top'};
 const svg = document.getElementById('c');
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const api = (path, opts = {}) => fetch(path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN), opts);
 const id = (m, n) => m + '/' + n;
 
 async function load() {
-  const st = await (await fetch('/api/state')).json();
+  const st = await (await api('/api/state')).json();
+  if (st.error) { document.getElementById('status').textContent = st.error; return; }
   const cfg = st.config || {}; status = st.status || {};
   layout = cfg.layout || {};
   const me = cfg.self || 'mac-studio', peer = Object.keys(cfg.machines || {}).find(k => k !== me) || 'daniel';
@@ -165,9 +168,9 @@ document.getElementById('save').onclick = async () => {
   const edges = links.map(l => ({from: {machine: l.from.split('/')[0], display: l.from.split('/').slice(1).join('/')}, side: l.side,
                                  to: {machine: l.to.split('/')[0], display: l.to.split('/').slice(1).join('/')}, ...(l.enter ? {enter: l.enter} : {})}));
   const lay = {}; screens.forEach(s => lay[s.id] = {x: Math.round(s.x), y: Math.round(s.y), w: s.w, h: s.h});
-  const r = await (await fetch('/api/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({edges, layout: lay})})).json();
+  const r = await (await api('/api/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({edges, layout: lay})})).json();
   document.getElementById('status').textContent = r.ok ? `saved ${r.links} flows, app restarted` : 'save failed: ' + r.error;
 };
-load(); setInterval(async () => { if (drag || pending) return; const st = await (await fetch('/api/state')).json(); status = st.status || {}; render(); }, 1500);
+load(); setInterval(async () => { if (drag || pending) return; const st = await (await api('/api/state')).json(); status = st.status || {}; render(); }, 1500);
 </script>
 </body></html>

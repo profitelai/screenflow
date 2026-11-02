@@ -14,10 +14,15 @@ if [ ! -s secret.txt ]; then
   if [ -s "$HOME/bizlocal/screen-flow/secret.txt" ]; then
     cp "$HOME/bizlocal/screen-flow/secret.txt" secret.txt; echo "secret copied from ~/bizlocal/screen-flow (same Mac)"
   else
-    while [ -z "${S:-}" ]; do
-      echo "Type the shared secret (read it on the Mac Studio with: cat ~/bizlocal/screen-flow/secret.txt), then Enter:"
-      read -r S
-    done
+    case "$(scutil --get LocalHostName 2>/dev/null)" in
+      Danimasters-Mac-Studio)   # the mouse owner creates the secret; the follower types it
+        S=$(python3 -c "import secrets;print(secrets.token_hex(16))"); echo "created a new 32-character secret in secret.txt (show it with: cat secret.txt)" ;;
+      *)
+        while [ -z "${S:-}" ]; do
+          echo "Type the shared secret (show it on the Mac Studio with: cat ~/bizlocal/screen-flow/secret.txt), then Enter:"
+          read -r S
+        done ;;
+    esac
     printf '%s\n' "$S" > secret.txt
   fi
   chmod 600 secret.txt
