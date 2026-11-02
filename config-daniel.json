@@ -73,6 +73,28 @@
         "machine": "mac-studio",
         "display": "VG248"
       }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      },
+      "side": "bottom",
+      "to": {
+        "machine": "mac-studio",
+        "display": "LG FULL HD"
+      }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "LG FULL HD"
+      },
+      "side": "top",
+      "to": {
+        "machine": "mac-studio",
+        "display": "VG248"
+      }
     }
   ]
 }

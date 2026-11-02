@@ -66,17 +66,27 @@ func localDisplays() -> [Disp] {
     return (0..<Int(n)).map { i in Disp(name: names[ids[i]] ?? "display-\(ids[i])", id: ids[i], b: CGDisplayBounds(ids[i])) }
 }
 func outerEdge(_ p: CGPoint, _ displays: [Disp]) -> (Disp, String)? {
-    for d in displays where p.y >= d.b.minY && p.y < d.b.maxY {
-        if abs(p.x - d.b.minX) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x - 3, y: p.y)) }) { return (d, "left") }
-        if p.x >= d.b.maxX - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x + 3, y: p.y)) }) { return (d, "right") }
+    for d in displays {
+        let inY = p.y >= d.b.minY && p.y < d.b.maxY, inX = p.x >= d.b.minX && p.x < d.b.maxX
+        if inY && abs(p.x - d.b.minX) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x - 3, y: p.y)) }) { return (d, "left") }
+        if inY && p.x >= d.b.maxX - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x + 3, y: p.y)) }) { return (d, "right") }
+        if inX && abs(p.y - d.b.minY) < 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y - 3)) }) { return (d, "top") }
+        if inX && p.y >= d.b.maxY - 1.5 && !displays.contains(where: { $0.b.contains(CGPoint(x: p.x, y: p.y + 3)) }) { return (d, "bottom") }
     }
     return nil
 }
 func entryPoint(_ d: Disp, side: String, frac: Double) -> CGPoint {
-    let y = d.b.minY + min(max(frac, 0), 1) * (d.b.height - 1)
-    return CGPoint(x: side == "left" ? d.b.minX + 1 : d.b.maxX - 2, y: y)
+    let f = min(max(frac, 0), 1)
+    switch side {
+    case "left":   return CGPoint(x: d.b.minX + 1, y: d.b.minY + f * (d.b.height - 1))
+    case "right":  return CGPoint(x: d.b.maxX - 2, y: d.b.minY + f * (d.b.height - 1))
+    case "top":    return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.minY + 1)
+    default:       return CGPoint(x: d.b.minX + f * (d.b.width - 1), y: d.b.maxY - 2)
+    }
 }
-func fracOnSide(_ p: CGPoint, _ d: Disp) -> Double { (p.y - d.b.minY) / max(d.b.height, 1) }
+func fracOnSide(_ p: CGPoint, _ d: Disp, _ side: String) -> Double {
+    (side == "top" || side == "bottom") ? (p.x - d.b.minX) / max(d.b.width, 1) : (p.y - d.b.minY) / max(d.b.height, 1)
+}
 func edgeFrom(_ machine: String, _ display: String, _ side: String) -> Edge? {
     edges.first { $0.from.machine == machine && $0.from.display == display && $0.side == side }
 }
@@ -137,13 +147,20 @@ func handleTap(_ type: CGEventType, _ event: CGEvent) -> Bool {   // returns tru
     }
     if !onPeer {
         guard [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type) else { return false }
+        let displays = localDisplays()
+        if let (d, side) = outerEdge(event.location, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
+           let t = displays.first(where: { $0.name == e.to.display }) {
+            let p = entryPoint(t, side: opposite(side), frac: fracOnSide(event.location, d, side))
+            warp(p)
+            return !dryRun            // the wrap replaces this move
+        }
         if connection != nil && authed,
-           let (d, side) = outerEdge(event.location, localDisplays()), let e = edgeFrom(cfg.selfName, d.name, side),
+           let (d, side) = outerEdge(event.location, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine != cfg.selfName,
            peerDisplays.contains(where: { ($0["name"] as? String) == e.to.display }) {   // target must exist on the peer
             onPeer = true
             setAssociate(false)
             log("cursor -> \(e.to.machine) \(e.to.display) (\(opposite(side)) edge)")
-            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(event.location, d)])
+            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(event.location, d, side)])
         }
         return false
     }
@@ -207,10 +224,14 @@ func handleMessage(_ m: [String: Any]) {
         let cur = cursor()
         let next = CGPoint(x: cur.x + dx, y: cur.y + dy)
         let displays = localDisplays()
+        if let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side), e.to.machine == cfg.selfName,
+           let t = displays.first(where: { $0.name == e.to.display }) {
+            warp(entryPoint(t, side: opposite(side), frac: fracOnSide(next, d, side))); return
+        }
         if let (d, side) = outerEdge(next, displays), let e = edgeFrom(cfg.selfName, d.name, side) {
             simulating = false
             log("cursor back to \(e.to.machine) (\(opposite(side)) edge)")
-            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(next, d)])
+            send(["t": "enter", "display": e.to.display, "side": opposite(side), "frac": fracOnSide(next, d, side)])
             return
         }
         var target = next
