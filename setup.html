@@ -13,7 +13,9 @@ button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
 main{padding:12px 20px}
 svg{width:100%;height:560px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;user-select:none;touch-action:none}
 .screen{cursor:grab}.screen.dragging{cursor:grabbing}
-.handle{fill:#fff;stroke:var(--blue);stroke-width:2;cursor:crosshair}
+.handle{fill:#fff;stroke:var(--blue);stroke-width:2;cursor:crosshair;r:7}.handle:hover{fill:#bfdbfe}
+.preview{fill:none;stroke:var(--blue);stroke-width:2.5;stroke-dasharray:6 4;pointer-events:none}
+.target{stroke:var(--green);stroke-width:4}
 .handle.armed{fill:var(--blue)}
 .link{fill:none;stroke-width:2.5;cursor:pointer}.link:hover{stroke-width:5}
 .link.selected{stroke-width:6;filter:drop-shadow(0 0 4px rgba(37,99,235,.6))}
@@ -29,17 +31,18 @@ td button{padding:2px 8px;font-size:12px}
   <button id="wrapH">Add left/right wrap</button>
   <button id="wrapV">Add top/bottom wrap</button>
   <button id="clear">Remove all links</button>
+  <button id="reload">Reload saved</button>
   <button id="save" class="primary">Save &amp; apply</button>
   <span id="status">loading…</span>
 </header>
 <main>
   <svg id="c" viewBox="0 0 1000 560"></svg>
-  <p class="hint">Drag a screen to where it stands on your desk. To draw a mouse flow: click a small circle on a screen's edge (the edge the mouse leaves), then click the screen it should arrive on (it enters on the opposite edge), or click one of that screen's edge circles to choose exactly which edge the mouse comes in from. Click an arrow or a table row to select it (both light up); press Delete to remove it, or use the row's delete button. Blue = Mac Studio, green = MacBook Pro. Edges between two screens of the same Mac are handled by macOS unless you draw a flow for them.</p>
+  <p class="hint">Drag a screen to where it stands on your desk. To draw a mouse flow: press on the circle at the edge the mouse will <b>leave</b>, drag the arrow out, and let go on the screen it should <b>arrive</b> on. Where you drop it chooses the arrival edge: drop near the left side and the mouse comes in from the left, near the top and it comes in from the top. Dropping on empty space cancels. One flow per leaving edge: a new drop replaces the old one. Click an arrow or a table row to select it (both light up); press Delete to remove it, or use the row's delete button. Blue = Mac Studio, green = MacBook Pro. Edges between two screens of the same Mac are handled by macOS unless you draw a flow for them.</p>
   <table id="links"><tr><th>Mouse leaves</th><th>Edge</th><th>Arrives on</th><th></th></tr></table>
 </main>
 <script>
 const S = 0.14;                    // desk pixels -> page units
-let screens = [], links = [], layout = {}, pending = null, drag = null, status = {}, selected = null;
+let screens = [], links = [], layout = {}, pending = null, drag = null, status = {}, selected = null, linkDrag = null;
 const opp = {left:'right', right:'left', top:'bottom', bottom:'top'};
 const svg = document.getElementById('c');
 const id = (m, n) => m + '/' + n;
@@ -102,7 +105,10 @@ function render() {
   if (status.cursor && !status.onPeer) { const loc = screens.filter(s => s.machine === me && s.osx != null);
     const under = loc.find(s => status.cursor.x >= s.osx && status.cursor.x < s.osx + s.w && status.cursor.y >= s.osy && status.cursor.y < s.osy + s.h);
     if (under) out += `<circle cx="${(under.x + status.cursor.x - under.osx) * S}" cy="${(under.y + status.cursor.y - under.osy) * S}" r="5" fill="var(--red)" stroke="#fff" stroke-width="2" pointer-events="none"/>`; }
+  if (linkDrag) { const a = screens.find(s => s.id === linkDrag.from); if (a) { const p1 = edgePt(a, linkDrag.side);
+    out += `<path class="preview" d="M${p1[0]},${p1[1]} L${linkDrag.x},${linkDrag.y}" marker-end="url(#m)"/>`; } }
   svg.innerHTML = out;
+  if (linkDrag && linkDrag.over) { const g = svg.querySelector(`.screen[data-id="${CSS.escape(linkDrag.over)}"] rect`); if (g) g.classList.add('target'); }
   document.getElementById('status').innerHTML = status.connected ? `<b>connected</b> to ${status.peer}, ${(status.peerDisplays || []).length} screens reported` : 'other Mac not connected (its screens are drawn from the last saved layout)';
   const t = document.getElementById('links'); t.innerHTML = '<tr><th>Mouse leaves</th><th>Edge</th><th>Arrives on</th><th></th></tr>' +
     links.map((l, i) => `<tr data-i="${i}"${i === selected ? ' class="selected"' : ''}><td>${l.from}</td><td>${l.side}</td><td>${l.to} <span style="color:#475569">(enters at its ${l.enter || opp[l.side]} edge)</span></td><td><button data-del="${i}">delete</button></td></tr>`).join('');
@@ -112,19 +118,28 @@ function render() {
 // interactions
 svg.addEventListener('pointerdown', ev => {
   const h = ev.target.closest('.handle');
-  if (h) { if (pending && pending.from !== h.dataset.id) { links.push({...pending, to: h.dataset.id, enter: h.dataset.side}); pending = null; } else { pending = {from: h.dataset.id, side: h.dataset.side}; } render(); return; }
+  if (h) { const pt = svgPt(ev); linkDrag = {from: h.dataset.id, side: h.dataset.side, x: pt.x, y: pt.y, over: null}; try { svg.setPointerCapture(ev.pointerId); } catch (e) {} render(); return; }
   const g = ev.target.closest('.screen');
-  if (!g) { pending = null; render(); return; }
-  if (pending) { if (pending.from !== g.dataset.id) { links.push({...pending, to: g.dataset.id, enter: null}); } pending = null; render(); return; }
+  if (!g) { selected = null; render(); return; }
   const s = screens.find(x => x.id === g.dataset.id); const pt = svgPt(ev);
   drag = {s, dx: pt.x / S - s.x, dy: pt.y / S - s.y}; g.classList.add('dragging'); svg.setPointerCapture(ev.pointerId);
 });
-svg.addEventListener('pointermove', ev => { if (!drag) return; const pt = svgPt(ev); drag.s.x = pt.x / S - drag.dx; drag.s.y = pt.y / S - drag.dy; render(); });
-svg.addEventListener('pointerup', () => { if (drag) { drag.s.x = Math.round(drag.s.x / 40) * 40; drag.s.y = Math.round(drag.s.y / 40) * 40; drag = null; render(); } });
+svg.addEventListener('pointermove', ev => {
+  const pt = svgPt(ev);
+  if (linkDrag) { linkDrag.x = pt.x; linkDrag.y = pt.y; const t = screenAt(pt); linkDrag.over = t && t.id !== linkDrag.from ? t.id : null; render(); return; }
+  if (!drag) return; drag.s.x = pt.x / S - drag.dx; drag.s.y = pt.y / S - drag.dy; render(); });
+svg.addEventListener('pointerup', ev => {
+  if (linkDrag) { const pt = svgPt(ev); const t = screenAt(pt);
+    if (t && t.id !== linkDrag.from) { links = links.filter(l => !(l.from === linkDrag.from && l.side === linkDrag.side)); links.push({from: linkDrag.from, side: linkDrag.side, to: t.id, enter: nearestEdge(t, pt)}); selected = links.length - 1; }
+    linkDrag = null; render(); return; }
+  if (drag) { drag.s.x = Math.round(drag.s.x / 40) * 40; drag.s.y = Math.round(drag.s.y / 40) * 40; drag = null; render(); } });
+function screenAt(pt) { return screens.find(s => pt.x >= s.x * S && pt.x <= (s.x + s.w) * S && pt.y >= s.y * S && pt.y <= (s.y + s.h) * S); }
+function nearestEdge(s, pt) { const x = s.x * S, y = s.y * S, w = s.w * S, h = s.h * S;
+  const d = {left: pt.x - x, right: x + w - pt.x, top: pt.y - y, bottom: y + h - pt.y}; return Object.keys(d).sort((a, b) => d[a] - d[b])[0]; }
 svg.addEventListener('click', ev => { const p = ev.target.closest('.link'); if (p) { selected = +p.dataset.i; render(); } });
 document.addEventListener('keydown', ev => { if ((ev.key === 'Delete' || ev.key === 'Backspace') && selected != null && !ev.target.closest('input,textarea')) { links.splice(selected, 1); selected = null; render(); ev.preventDefault(); } if (ev.key === 'Escape') { selected = null; pending = null; render(); } });
 document.getElementById('links').addEventListener('click', ev => { if (ev.target.dataset.del != null) { links.splice(+ev.target.dataset.del, 1); selected = null; render(); return; } const r = ev.target.closest('tr[data-i]'); if (r) { selected = +r.dataset.i; render(); } });
-function svgPt(ev) { const r = svg.getBoundingClientRect(); return {x: (ev.clientX - r.left) * 1000 / r.width, y: (ev.clientY - r.top) * 560 / r.height}; }
+function svgPt(ev) { const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY; const q = p.matrixTransform(svg.getScreenCTM().inverse()); return {x: q.x, y: q.y}; }   // exact in any window shape
 function touching(a, b, side) {   // b continues past a's `side` edge, with overlap on the other axis
   const gap = 60;
   if (side === 'right')  return Math.abs(a.x + a.w - b.x) < gap && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -145,6 +160,7 @@ document.getElementById('wrapV').onclick = () => {   // per column: bottom scree
   Object.values(cols).forEach(c => { if (c.length < 2) return; c.sort((a, b) => a.y - b.y);
     addLink(c[c.length - 1].id, 'bottom', c[0].id); addLink(c[0].id, 'top', c[c.length - 1].id); }); render(); };
 document.getElementById('clear').onclick = () => { links = []; selected = null; render(); };
+document.getElementById('reload').onclick = () => { selected = null; pending = null; linkDrag = null; load(); };
 document.getElementById('save').onclick = async () => {
   const edges = links.map(l => ({from: {machine: l.from.split('/')[0], display: l.from.split('/').slice(1).join('/')}, side: l.side,
                                  to: {machine: l.to.split('/')[0], display: l.to.split('/').slice(1).join('/')}, ...(l.enter ? {enter: l.enter} : {})}));

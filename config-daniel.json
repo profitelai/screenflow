@@ -84,6 +84,17 @@
         "machine": "mac-studio",
         "display": "VG248"
       }
+    },
+    {
+      "from": {
+        "machine": "mac-studio",
+        "display": "LG FULL HD"
+      },
+      "side": "right",
+      "to": {
+        "machine": "daniel",
+        "display": "Built-in Retina Display"
+      }
     }
   ],
   "layout": {
